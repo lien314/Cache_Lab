@@ -49,17 +49,61 @@ static void usage(const char *prog)
 }
 
 /*
- * TODO: Simulate one data access at addr.
- * Extract the set index and tag, then update the cache state and counters
- * for a hit, a miss, or a miss with an LRU eviction. An eviction also counts
- * as a miss. Handle s == 0 and s + b == 64 without shifting by 64 bits.
- * If verbose is set, append " hit", " miss", or " miss eviction" without
- * a newline. replay() prints the trace entry and the trailing newline.
+ * 模拟一次对 addr 的数据访问：拆出组索引和标记，按 LRU 更新缓存并
+ * 统计 hit / miss / eviction。注意 b 和 s+b 可能等于 64，移位前要判断。
  */
 static void access_cache(uint64_t addr)
 {
-    (void)addr;
-    (void)tick;
+    unsigned i, set;
+    uint64_t tag;
+    line_t *lines;
+
+    /* set 索引在中间 s 位，标记在高位；b 或 s+b 为 64 时不能直接移位 */
+    if (b >= 64) {
+        set = 0;
+        tag = 0;
+    } else {
+        set = (unsigned)((addr >> b) & (((uint64_t)1 << s) - 1));
+        tag = (s + b >= 64) ? 0 : (addr >> (s + b));
+    }
+
+    lines = &cache[(size_t)set * (size_t)E];
+
+    for (i = 0; i < (unsigned)E; i++) {
+        if (lines[i].valid && lines[i].tag == tag) {
+            hits++;
+            lines[i].last_used = tick++;
+            if (verbose)
+                printf(" hit");
+            return;
+        }
+    }
+
+    misses++;
+
+    /* 先用编号最小的无效行；没有的话换出 last_used 最小的行 */
+    unsigned victim = 0;
+    int evict = 1;
+    for (i = 0; i < (unsigned)E; i++) {
+        if (!lines[i].valid) {
+            victim = i;
+            evict = 0;
+            break;
+        }
+    }
+    if (evict) {
+        for (i = 1; i < (unsigned)E; i++)
+            if (lines[i].last_used < lines[victim].last_used)
+                victim = i;
+        evictions++;
+    }
+
+    lines[victim].valid = 1;
+    lines[victim].tag = tag;
+    lines[victim].last_used = tick++;
+
+    if (verbose)
+        printf(evict ? " miss eviction" : " miss");
 }
 
 /* replay - run every data access in the trace through the cache */
